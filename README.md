@@ -1,13 +1,13 @@
 # sas-js-demo
 
-End-to-end browser demo for [SAS](https://server.attentionlabs.ai) — streams microphone and webcam to the SD Attention Server, then forwards detected speech segments to OpenAI Realtime for a conversational audio response.
+End-to-end browser demo for attention labs SAS (Selective Attention System) SDK — streams microphone and webcam to the SAS Server, then forwards detected speech segments to OpenAI Realtime.
 
-Everything runs in the browser. The server tells you *when* someone is speaking and what they said; this demo routes that speech to the LLM of your choice (OpenAI Realtime is shown, but the SDK hands you PCM16 audio — drop in any provider).
+Everything runs in the browser. The server tells you *when* someone is speaking and what they said; this demo routes that speech to the LLM of your choice (OpenAI Realtime is shown).
 
 ## What you'll need
 
 - A SAS auth token
-- An OpenAI API key with Realtime access *(optional — omit to run without the LLM stage and just see live predictions)*
+- An OpenAI API key with Realtime access *(optional — omit to run and just see live predictions)*
 
 ## Run
 
@@ -27,7 +27,6 @@ Serve the repo root with any static file server — e.g. `npx serve`, `python3 -
 | ------------ | -------- | ----- |
 | `token`      | yes      | SAS auth token |
 | `openai_key` | no       | Enables the LLM round-trip. Omit to just watch predictions and VAD. |
-| `server`     | no       | Override the default server URL (`wss://server.attentionlabs.ai/ws`) to point at your own SAS instance. |
 
 ## How it works
 
