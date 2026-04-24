@@ -77,8 +77,13 @@ section {
   border-color: var(--accent);
 }
 
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 .video-card {
-  grid-row: span 2;
   position: relative;
   padding: 0;
   overflow: hidden;
@@ -101,6 +106,7 @@ section {
   letter-spacing: 1px;
 }
 
+.warmup[hidden] { display: none; }
 .warmup {
   position: absolute;
   inset: 0;
@@ -162,6 +168,9 @@ section {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 12px;
+}
+.sidebar .stats-card {
+  grid-template-columns: 1fr;
 }
 .stat .label { margin-bottom: 4px; }
 

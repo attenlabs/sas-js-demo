@@ -24,11 +24,11 @@
       <div class="auth-fields">
         <div class="auth-field">
           <label for="input-token">SAS Token <span class="required">*</span></label>
-          <input type="password" id="input-token" placeholder="Paste your SAS auth token">
+          <input type="text" id="input-token" placeholder="Paste your SAS auth token">
         </div>
         <div class="auth-field">
           <label for="input-openai">OpenAI Key <span class="optional">(optional)</span></label>
-          <input type="password" id="input-openai" placeholder="sk-...">
+          <input type="text" id="input-openai" placeholder="sk-...">
         </div>
       </div>
     </section>
@@ -51,41 +51,43 @@
       </div>
     </section>
 
-    <section class="prediction-card">
-      <div class="label">Live Prediction</div>
-      <div class="pred-row">
-        <div class="pred-class" id="pred-class">--</div>
-        <div class="pred-conf" id="pred-conf">--</div>
-      </div>
-      <div class="conf-bar">
-        <div class="conf-fill" id="conf-fill"></div>
-      </div>
-      <div class="pred-meta">
-        <span id="pred-source">--</span> · <span id="num-faces">0</span> faces
-      </div>
-    </section>
+    <div class="sidebar">
+      <section class="prediction-card">
+        <div class="label">Live Prediction</div>
+        <div class="pred-row">
+          <div class="pred-class" id="pred-class">--</div>
+          <div class="pred-conf" id="pred-conf">--</div>
+        </div>
+        <div class="conf-bar">
+          <div class="conf-fill" id="conf-fill"></div>
+        </div>
+        <div class="pred-meta">
+          <span id="pred-source">--</span> · <span id="num-faces">0</span> faces
+        </div>
+      </section>
 
-    <section class="stats-card">
-      <div class="stat">
-        <div class="label">VAD</div>
-        <div class="value" id="vad-value">--</div>
-      </div>
-      <div class="stat">
-        <div class="label">Conversation</div>
-        <div class="value state-idle" id="conv-state">IDLE</div>
-      </div>
-      <div class="stat">
-        <div class="label">LLM</div>
-        <div class="value state-idle" id="llm-state">IDLE</div>
-      </div>
-    </section>
+      <section class="stats-card">
+        <div class="stat">
+          <div class="label">VAD</div>
+          <div class="value" id="vad-value">--</div>
+        </div>
+        <div class="stat">
+          <div class="label">Conversation</div>
+          <div class="value state-idle" id="conv-state">IDLE</div>
+        </div>
+        <div class="stat">
+          <div class="label">LLM</div>
+          <div class="value state-idle" id="llm-state">IDLE</div>
+        </div>
+      </section>
 
-    <section class="threshold-card">
-      <label for="threshold">
-        Device trigger threshold: <span id="threshold-value">0.70</span>
-      </label>
-      <input type="range" id="threshold" min="0" max="1" step="0.05" value="0.7">
-    </section>
+      <section class="threshold-card">
+        <label for="threshold">
+          Device trigger threshold: <span id="threshold-value">0.70</span>
+        </label>
+        <input type="range" id="threshold" min="0" max="1" step="0.05" value="0.7">
+      </section>
+    </div>
 
     <section class="log-card">
       <div class="label">Log</div>

@@ -103,7 +103,6 @@ async function start() {
 
   btnStart.disabled = true;
   btnStop.disabled = false;
-  warmup.hidden = false;
   setStatus("connecting");
 
   client = new AttentionClient({
@@ -114,6 +113,7 @@ async function start() {
 
   client.on("connected", () => {
     setStatus("connected");
+    warmup.hidden = false;
     log("info", "ws connected");
   });
   client.on("started", () => log("info", "server warmup complete"));
