@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>sas-js demo</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "sas-js": "./node_modules/sas-js/dist/index.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <header>
+    <h1>sas-js demo</h1>
+    <p class="sub">Microphone + webcam → SD Attention Server → OpenAI Realtime</p>
+  </header>
+
+  <main>
+    <section class="video-card">
+      <video id="preview" autoplay playsinline muted></video>
+      <div class="video-badge">CAM</div>
+      <div class="warmup" id="warmup" hidden>
+        <div class="spinner"></div>
+        <div class="warmup-text">warming up…</div>
+      </div>
+    </section>
+
+    <section class="prediction-card">
+      <div class="label">Live Prediction</div>
+      <div class="pred-row">
+        <div class="pred-class" id="pred-class">--</div>
+        <div class="pred-conf" id="pred-conf">--</div>
+      </div>
+      <div class="conf-bar">
+        <div class="conf-fill" id="conf-fill"></div>
+      </div>
+      <div class="pred-meta">
+        <span id="pred-source">--</span> · <span id="num-faces">0</span> faces
+      </div>
+    </section>
+
+    <section class="stats-card">
+      <div class="stat">
+        <div class="label">VAD</div>
+        <div class="value" id="vad-value">--</div>
+      </div>
+      <div class="stat">
+        <div class="label">Conversation</div>
+        <div class="value state-idle" id="conv-state">IDLE</div>
+      </div>
+      <div class="stat">
+        <div class="label">LLM</div>
+        <div class="value state-idle" id="llm-state">IDLE</div>
+      </div>
+    </section>
+
+    <section class="threshold-card">
+      <label for="threshold">
+        Device trigger threshold: <span id="threshold-value">0.70</span>
+      </label>
+      <input type="range" id="threshold" min="0" max="1" step="0.05" value="0.7">
+    </section>
+
+    <section class="controls">
+      <div class="status">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="status-text">Disconnected</span>
+      </div>
+      <button id="btn-start">Start</button>
+      <button id="btn-stop" disabled>Stop</button>
+    </section>
+
+    <section class="log-card">
+      <div class="label">Log</div>
+      <pre id="log"></pre>
+    </section>
+  </main>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
