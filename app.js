@@ -6,15 +6,12 @@ const LLM_INSTRUCTIONS =
   "You are a helpful assistant. Respond concisely in 1 sentence. " +
   "If a device/TV command is spoken to you, respond as if you were controlling a TV.";
 
-// Read config from URL params.
-//   ?token=...       server auth token (required)
-//   ?openai_key=...  OpenAI key for the LLM bridge (optional — LLM disabled if omitted)
-//   ?server=...      override server WS URL (default: SDK's production URL)
+// Read server override from URL params (everything else comes from UI inputs).
 const params = new URLSearchParams(location.search);
-const token = params.get("token");
-const openaiKey = params.get("openai_key");
 const serverOverride = params.get("server") || undefined;
 
+const inputToken = document.getElementById("input-token");
+const inputOpenai = document.getElementById("input-openai");
 const preview = document.getElementById("preview");
 const warmup = document.getElementById("warmup");
 const predClass = document.getElementById("pred-class");
@@ -84,16 +81,24 @@ thresholdInput.addEventListener("input", () => {
   if (client) client.setThreshold(Number(thresholdInput.value));
 });
 
+// Enable Start only when a token is present.
+inputToken.addEventListener("input", () => {
+  btnStart.disabled = !inputToken.value.trim();
+});
+
 btnStart.addEventListener("click", () => { start(); });
 btnStop.addEventListener("click", () => { teardown(); });
 
 async function start() {
+  const token = inputToken.value.trim();
+  const openaiKey = inputOpenai.value.trim() || null;
+
   if (!token) {
-    log("error", "missing ?token= param — cannot connect");
+    log("error", "enter a SAS token above");
     return;
   }
   if (!openaiKey) {
-    log("warn", "no ?openai_key= param — LLM bridge disabled");
+    log("warn", "no OpenAI key — LLM bridge disabled");
   }
 
   btnStart.disabled = true;
