@@ -6,7 +6,7 @@ Everything runs in the browser. The server tells you *when* someone is speaking 
 
 ## What you'll need
 
-- A SAS auth token
+- A SAS auth token (sign up on the dashboard [here](https://attentionlabs.ai/dashboard/))
 - An OpenAI API key with Realtime access *(optional — omit to run and just see live predictions)*
 
 ## Run
