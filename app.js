@@ -1,212 +1,268 @@
 import { AttentionClient } from "sas-js";
 import { RealtimeLLMBridge } from "./llm.js";
 
-const CLASS_LABELS = { 0: "Silent", 1: "Human", 2: "Device" };
+const CLASS_TO_STATE = { 0: "silent", 1: "human", 2: "device" };
+
+const STATES = {
+  silent:     { label: "SILENT",                short: true,  body: "state-silent" },
+  human:      { label: "TALKING TO EACH OTHER", short: false, body: "state-human"  },
+  device:     { label: "TALKING TO COMPUTER",   short: false, body: "state-device" },
+  responding: { label: "AI IS RESPONDING",      short: false, body: "state-responding" },
+};
+
 const LLM_INSTRUCTIONS =
   "You are a helpful assistant. Respond concisely in 1 sentence. " +
   "If a device/TV command is spoken to you, respond as if you were controlling a TV.";
 
-// Read server override from URL params (everything else comes from UI inputs).
+// URL params: ?server=… ?token=… ?openai_key=…
 const params = new URLSearchParams(location.search);
 const serverOverride = params.get("server") || undefined;
+const urlToken = params.get("token");
+const urlOpenai = params.get("openai_key");
 
-const inputToken = document.getElementById("input-token");
-const inputOpenai = document.getElementById("input-openai");
-const preview = document.getElementById("preview");
-const warmup = document.getElementById("warmup");
-const predClass = document.getElementById("pred-class");
-const predConf = document.getElementById("pred-conf");
-const confFill = document.getElementById("conf-fill");
-const predSource = document.getElementById("pred-source");
-const numFaces = document.getElementById("num-faces");
-const vadValue = document.getElementById("vad-value");
-const convStateEl = document.getElementById("conv-state");
-const llmStateEl = document.getElementById("llm-state");
-const thresholdInput = document.getElementById("threshold");
-const thresholdValue = document.getElementById("threshold-value");
-const statusDot = document.getElementById("status-dot");
-const statusText = document.getElementById("status-text");
-const btnStart = document.getElementById("btn-start");
-const btnStop = document.getElementById("btn-stop");
-const logEl = document.getElementById("log");
+// ── DOM refs ────────────────────────────────────────────────────────────────
+const authPanel    = document.getElementById("authPanel");
+const inputToken   = document.getElementById("input-token");
+const inputOpenai  = document.getElementById("input-openai");
+const classNameEl  = document.getElementById("className");
+const confPctEl    = document.getElementById("confPct");
+const statFaces    = document.getElementById("statFaces");
+const statVad      = document.getElementById("statVad");
+const statConv     = document.getElementById("statConv");
+const btn          = document.getElementById("btnConnect");
+const orbEl        = document.getElementById("orb");
+const soundBars    = document.getElementById("soundBars");
+const videoEl      = document.getElementById("videoEl");
+const camPlaceholder = videoEl.previousElementSibling;
+const threshSlider = document.getElementById("threshSlider");
+const threshVal    = document.getElementById("threshVal");
+const toastEl      = document.getElementById("toast");
 
+// ── Session state ──────────────────────────────────────────────────────────
 let client = null;
 let llm = null;
-let llmState = "idle";
+let running = false;
+let warmedUp = false;
+let llmActive = false;
+let pred = { s: "silent", conf: 0, faces: 0 };
+let vadStr = "--";
+let convStr = "--";
+let modelClass2Threshold = 0.70;
 
-function log(kind, msg, extra) {
-  const ts = new Date().toISOString().slice(11, 23);
-  const line = `[${ts}] ${kind}: ${msg}${extra ? " " + JSON.stringify(extra) : ""}`;
-  const lines = (logEl.textContent ? logEl.textContent.split("\n") : []).concat(line);
-  logEl.textContent = lines.slice(-200).join("\n");
-  logEl.scrollTop = logEl.scrollHeight;
+// Pre-populate inputs from URL params (still editable).
+if (urlToken)  inputToken.value  = urlToken;
+if (urlOpenai) inputOpenai.value = urlOpenai;
+
+// ── Toast ──────────────────────────────────────────────────────────────────
+let toastTimer = null;
+function toast(msg, ms = 5000) {
+  toastEl.textContent = msg;
+  toastEl.classList.add("visible");
+  clearTimeout(toastTimer);
+  if (ms > 0) toastTimer = setTimeout(() => toastEl.classList.remove("visible"), ms);
+}
+function clearToast() {
+  toastEl.classList.remove("visible");
+  clearTimeout(toastTimer);
 }
 
-function setStatus(state) {
-  statusDot.className = `status-dot ${state === "connected" ? "connected" : state === "connecting" ? "connecting" : ""}`;
-  statusText.textContent =
-    state === "connected" ? "Connected" :
-    state === "connecting" ? "Connecting…" :
-    "Disconnected";
+// ── Render: rebuild visible UI from latest signals ─────────────────────────
+function render() {
+  const displayS = llmActive ? "responding" : (warmedUp ? pred.s : "silent");
+  const st = STATES[displayS];
+
+  document.body.className = st.body;
+  classNameEl.classList.toggle("short", st.short);
+
+  if (!running) {
+    classNameEl.textContent = "NOT CONNECTED";
+    confPctEl.textContent = "--";
+    statFaces.textContent = "--";
+    statVad.textContent = "--";
+    statConv.textContent = "--";
+    soundBars.classList.remove("visible");
+    orbEl.classList.remove("active", "warming");
+    return;
+  }
+
+  if (!warmedUp) {
+    classNameEl.textContent = "CONNECTING";
+    classNameEl.classList.remove("short");
+    confPctEl.textContent = "--";
+    statFaces.textContent = pred.faces || "--";
+    statVad.textContent = vadStr;
+    statConv.textContent = convStr;
+    soundBars.classList.remove("visible");
+    orbEl.classList.remove("active");
+    orbEl.classList.add("warming");
+    return;
+  }
+
+  orbEl.classList.remove("warming");
+  classNameEl.textContent = st.label;
+  confPctEl.textContent = pred.conf > 0 ? Math.round(pred.conf * 100) + "%" : "--";
+  statFaces.textContent = pred.faces ?? "--";
+  statVad.textContent = vadStr;
+  statConv.textContent = convStr;
+
+  const speaking = llmActive || (pred.s !== "silent" && pred.conf > 0.3);
+  soundBars.classList.toggle("visible", speaking);
+  orbEl.classList.toggle("active", speaking);
 }
 
-function setLLMState(state) {
-  llmState = state;
-  llmStateEl.textContent = state.toUpperCase();
-  llmStateEl.className = `value state-${state}`;
+// ── Threshold ──────────────────────────────────────────────────────────────
+function setThresholdFromSlider() {
+  modelClass2Threshold = Number(threshSlider.value) / 100;
+  threshVal.textContent = modelClass2Threshold.toFixed(2);
+  if (client) client.setThreshold(modelClass2Threshold);
 }
+threshSlider.addEventListener("input", setThresholdFromSlider);
 
-function renderPrediction({ cls, confidence, source, numFaces: faces }) {
-  const label = CLASS_LABELS[cls] ?? `Class ${cls}`;
-  predClass.textContent = label.toUpperCase();
-  const pct = Math.round((confidence ?? 0) * 100);
-  predConf.textContent = `${pct}%`;
-  confFill.style.width = `${pct}%`;
-  confFill.className = `conf-fill class-${cls ?? 0}`;
-  predSource.textContent = source || "--";
-  numFaces.textContent = faces ?? 0;
+// ── Connect button gating ──────────────────────────────────────────────────
+function refreshConnectButton() {
+  if (running) return;
+  btn.disabled = !inputToken.value.trim();
 }
+inputToken.addEventListener("input", refreshConnectButton);
+refreshConnectButton();
 
-function renderConvState(state) {
-  convStateEl.textContent = state.toUpperCase();
-  convStateEl.className = `value state-${state}`;
-}
+btn.addEventListener("click", () => running ? stop() : start());
 
-function renderThreshold() {
-  thresholdValue.textContent = Number(thresholdInput.value).toFixed(2);
-}
-
-thresholdInput.addEventListener("input", () => {
-  renderThreshold();
-  if (client) client.setThreshold(Number(thresholdInput.value));
-});
-
-// Enable Start only when a token is present.
-inputToken.addEventListener("input", () => {
-  btnStart.disabled = !inputToken.value.trim();
-});
-
-btnStart.addEventListener("click", () => { start(); });
-btnStop.addEventListener("click", () => { teardown(); });
-
+// ── Lifecycle ──────────────────────────────────────────────────────────────
 async function start() {
   const token = inputToken.value.trim();
   const openaiKey = inputOpenai.value.trim() || null;
+  if (!token) { toast("Enter a SAS token to connect."); return; }
 
-  if (!token) {
-    log("error", "enter a SAS token above");
-    return;
-  }
-  if (!openaiKey) {
-    log("warn", "no OpenAI key — LLM bridge disabled");
-  }
+  btn.disabled = true;
+  btn.textContent = "Connecting…";
+  clearToast();
+  authPanel.classList.add("hidden");
 
-  btnStart.disabled = true;
-  btnStop.disabled = false;
-  setStatus("connecting");
+  // Reset session state.
+  warmedUp = false;
+  llmActive = false;
+  pred = { s: "silent", conf: 0, faces: 0 };
+  vadStr = "--";
+  convStr = "--";
 
   client = new AttentionClient({
     url: serverOverride,
     token,
-    initialThreshold: Number(thresholdInput.value),
+    initialThreshold: modelClass2Threshold,
   });
 
   client.on("connected", () => {
-    setStatus("connected");
-    warmup.hidden = false;
-    log("info", "ws connected");
+    running = true;
+    btn.disabled = false;
+    btn.textContent = "Disconnect";
+    btn.classList.add("stop");
+    videoEl.style.display = "block";
+    if (camPlaceholder) camPlaceholder.style.display = "none";
+    render();
   });
-  client.on("started", () => log("info", "server warmup complete"));
+
   client.on("warmupComplete", () => {
-    warmup.hidden = true;
-    log("info", "first prediction received");
+    warmedUp = true;
+    render();
   });
+
   client.on("prediction", (e) => {
-    // Server keeps predicting during LLM response; freeze UI during that window.
-    if (llmState === "speaking" || llmState === "processing") return;
-    renderPrediction(e);
+    if (llmActive) return;
+    const s = CLASS_TO_STATE[e.cls] ?? "silent";
+    pred = { s, conf: e.confidence ?? 0, faces: e.numFaces ?? 0 };
+    render();
   });
+
   client.on("vad", (e) => {
-    vadValue.textContent = `${Math.round(e.probability * 100)}%`;
+    vadStr = e.probability != null ? `${Math.round(e.probability * 100)}%` : "--";
+    render();
   });
-  client.on("state", (e) => renderConvState(e.state));
+
+  client.on("state", (e) => {
+    const map = { listening: "Listening", sending: "Sending", cancelled: "Idle", idle: "Idle" };
+    convStr = map[e.state] ?? e.state ?? "--";
+    render();
+  });
+
   client.on("speechReady", (e) => {
-    setLLMState("processing");
-    log("info", `speech ready (${e.durationSec.toFixed(2)}s) — forwarding to LLM`);
     if (llm) {
       llm.sendAudioB64(e.audioBase64);
-    } else {
-      setLLMState("idle");
-      log("warn", "no LLM configured — audio dropped");
     }
   });
+
   client.on("config", (e) => {
-    thresholdInput.value = String(e.modelClass2Threshold);
-    renderThreshold();
+    if (typeof e.modelClass2Threshold === "number") {
+      modelClass2Threshold = e.modelClass2Threshold;
+      threshSlider.value = String(Math.round(modelClass2Threshold * 100));
+      threshVal.textContent = modelClass2Threshold.toFixed(2);
+    }
   });
-  client.on("stats", (s) => {
-    log(
-      "stats",
-      `rtt=${s.rttMs != null ? s.rttMs.toFixed(0) + "ms" : "n/a"} ` +
-      `video=${s.sentVideo}(skip ${s.skippedVideo}) audio=${s.sentAudio} ` +
-      `buf=${s.bufferedAmount}B`,
-    );
-  });
+
   client.on("error", (e) => {
-    log("error", `${e.title}: ${e.message}${e.detail ? " | " + e.detail : ""}`);
+    toast(`${e.title || "Error"}: ${e.message}`, 0);
   });
+
   client.on("disconnected", (e) => {
-    setStatus("disconnected");
-    log("warn", `disconnected code=${e.code}${e.reason ? " reason=" + e.reason : ""}`);
+    if (running && e.code !== 1000) {
+      const reason = e.code === 1008 ? "auth rejected"
+                   : e.code === 1013 ? "rate limited"
+                   : e.code === 1006 ? "connection failed"
+                   : e.reason || `closed (code ${e.code})`;
+      toast(`Disconnected — ${reason}`, 0);
+    }
+    stop();
   });
 
   if (openaiKey) {
-    llm = new RealtimeLLMBridge({
-      apiKey: openaiKey,
-      instructions: LLM_INSTRUCTIONS,
-    });
+    llm = new RealtimeLLMBridge({ apiKey: openaiKey, instructions: LLM_INSTRUCTIONS });
     llm.on("speakingStart", () => {
-      setLLMState("speaking");
-      client.mute();
-      client.markResponding(true);
+      llmActive = true;
+      if (client) { client.mute(); client.markResponding(true); }
+      render();
     });
-    llm.on("transcript", (t) => log("llm", `transcript: ${t}`));
     llm.on("speakingEnd", () => {
-      setLLMState("idle");
-      if (client) {
-        client.unmute();
-        client.markResponding(false);
-      }
+      llmActive = false;
+      if (client) { client.unmute(); client.markResponding(false); }
+      render();
     });
     llm.on("error", (e) => {
-      log("error", `${e.title}: ${e.message}`);
-      setLLMState("idle");
+      toast(`LLM ${e.title || "error"}: ${e.message}`);
+      llmActive = false;
+      if (client) { client.unmute(); client.markResponding(false); }
+      render();
     });
   }
 
   try {
-    await client.start({ videoElement: preview });
+    await client.start({ videoElement: videoEl });
   } catch (err) {
-    log("error", `start failed: ${err?.title || err?.name || "Error"}: ${err?.message || err}`);
-    await teardown();
+    toast(`Start failed: ${err?.message || err}`, 0);
+    stop();
   }
 }
 
-async function teardown() {
-  if (client) { await client.stop(); client = null; }
-  if (llm) { llm.close(); llm = null; }
+async function stop() {
+  running = false;
+  if (client) { try { await client.stop(); } catch {} client = null; }
+  if (llm)    { llm.close(); llm = null; }
 
-  warmup.hidden = true;
-  setStatus("disconnected");
-  renderPrediction({ cls: 0, confidence: 0, source: "--", numFaces: 0 });
-  predClass.textContent = "--";
-  predConf.textContent = "--";
-  vadValue.textContent = "--";
-  renderConvState("idle");
-  setLLMState("idle");
+  warmedUp = false;
+  llmActive = false;
+  pred = { s: "silent", conf: 0, faces: 0 };
+  vadStr = "--";
+  convStr = "--";
 
-  btnStart.disabled = false;
-  btnStop.disabled = true;
+  videoEl.style.display = "none";
+  if (camPlaceholder) camPlaceholder.style.display = "flex";
+  videoEl.srcObject = null;
+
+  authPanel.classList.remove("hidden");
+  btn.disabled = !inputToken.value.trim();
+  btn.textContent = "Connect";
+  btn.classList.remove("stop");
+  render();
 }
 
-renderThreshold();
+// Initial paint.
+render();
