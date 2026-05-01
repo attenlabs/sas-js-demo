@@ -20,6 +20,7 @@ export class RealtimeLLMBridge {
     this.ws = null;
     this.sessionReady = false;
     this.pendingAudio = null;
+    this.pendingGreeting = null;
     this.audioChunks = [];
     this.responseTimer = null;
     this.closed = false;
@@ -53,6 +54,18 @@ export class RealtimeLLMBridge {
     this.closed = false;
     if (this.sessionReady && this.ws?.readyState === WebSocket.OPEN) {
       this._flush();
+      return;
+    }
+    this._connect();
+  }
+
+  // Trigger an audio response from text instructions alone (no user audio).
+  // Useful for proactive greetings after warmup.
+  greet(instructions) {
+    this.pendingGreeting = instructions;
+    this.closed = false;
+    if (this.sessionReady && this.ws?.readyState === WebSocket.OPEN) {
+      this._flushGreeting();
       return;
     }
     this._connect();
@@ -95,8 +108,9 @@ export class RealtimeLLMBridge {
     this.ws.onclose = (e) => {
       this.sessionReady = false;
       this.ws = null;
-      if (this.pendingAudio && !this.closed) {
+      if ((this.pendingAudio || this.pendingGreeting) && !this.closed) {
         this.pendingAudio = null;
+        this.pendingGreeting = null;
         this._emit("error", {
           title: "LLM Disconnected",
           message: "LLM connection dropped mid-request.",
@@ -131,6 +145,25 @@ export class RealtimeLLMBridge {
     }
   }
 
+  _flushGreeting() {
+    if (!this.pendingGreeting) return;
+    const instructions = this.pendingGreeting;
+    this.pendingGreeting = null;
+    this.responseTimer = performance.now();
+    try {
+      this.ws.send(JSON.stringify({
+        type: "response.create",
+        response: { instructions },
+      }));
+    } catch (err) {
+      this._emit("error", {
+        title: "LLM Greet Error",
+        message: err.message ?? String(err),
+      });
+      this._emit("speakingEnd");
+    }
+  }
+
   _onMessage(e) {
     let data;
     try { data = JSON.parse(e.data); } catch { return; }
@@ -140,6 +173,7 @@ export class RealtimeLLMBridge {
       case "session.updated":
         if (!this.sessionReady) {
           this.sessionReady = true;
+          this._flushGreeting();
           this._flush();
         }
         break;
@@ -216,6 +250,7 @@ export class RealtimeLLMBridge {
   close() {
     this.closed = true;
     this.pendingAudio = null;
+    this.pendingGreeting = null;
     if (this.ws) {
       try { this.ws.close(); } catch {}
       this.ws = null;

@@ -14,11 +14,33 @@ const LLM_INSTRUCTIONS =
   "You are a helpful assistant. Respond concisely in 1 sentence. " +
   "If a device/TV command is spoken to you, respond as if you were controlling a TV.";
 
+const GREETING_INSTRUCTIONS =
+  "Greet the user warmly in one short sentence — say you can help with anything they want.";
+
+// Hold mute + responding-state for a beat after playback ends so speakers /
+// room reverb don't bleed into the mic and trigger a feedback loop.
+const POST_PLAYBACK_MUTE_HOLD_MS = 400;
+
+const SUGGESTIONS = [
+  "Try talking to the computer",
+  "Now try talking to each other",
+  "Now test this however you want!",
+];
+
+const GUIDE_STEPS = {
+  AWAITING_COMPUTER: 0,
+  COMPUTER_DONE_WAITING_FOR_SILENCE: 1,
+  AWAITING_HUMAN: 2,
+  HUMAN_DONE_WAITING_FOR_SILENCE: 3,
+  DONE: 4,
+};
+
 // URL params: ?server=… ?token=… ?openai_key=…
 const params = new URLSearchParams(location.search);
 const serverOverride = params.get("server") || undefined;
 const urlToken = params.get("token");
 const urlOpenai = params.get("openai_key");
+const ENABLE_GREETING = !params.has("nogreet");
 
 // ── DOM refs ────────────────────────────────────────────────────────────────
 const authPanel    = document.getElementById("authPanel");
@@ -37,6 +59,10 @@ const camPlaceholder = videoEl.previousElementSibling;
 const threshSlider = document.getElementById("threshSlider");
 const threshVal    = document.getElementById("threshVal");
 const toastEl      = document.getElementById("toast");
+const suggestionEl = document.getElementById("suggestion");
+const suggestionTx = document.getElementById("suggestionText");
+const tokensBlock  = document.getElementById("tokensBlock");
+const tokensCount  = document.getElementById("tokensCount");
 
 // ── Session state ──────────────────────────────────────────────────────────
 let client = null;
@@ -48,6 +74,9 @@ let pred = { s: "silent", conf: 0, faces: 0 };
 let vadStr = "--";
 let convStr = "--";
 let modelClass2Threshold = 0.70;
+
+let currentSuggestion = -1;
+let guideStep = GUIDE_STEPS.AWAITING_COMPUTER;
 
 // Pre-populate inputs from URL params (still editable).
 if (urlToken)  inputToken.value  = urlToken;
@@ -66,6 +95,119 @@ function clearToast() {
   clearTimeout(toastTimer);
 }
 
+// ── Tokens ticker ──────────────────────────────────────────────────────────
+let tokensSaved = 0;
+let tickerTimer = null;
+let tickerRunning = false;
+
+function formatTokens(n) {
+  return String(Math.min(n, 9999)).padStart(4, "0");
+}
+
+function startTicker() {
+  if (tickerRunning) return;
+  tickerRunning = true;
+  tokensBlock.classList.add("visible");
+  const tick = () => {
+    if (!tickerRunning) return;
+    if (tokensSaved < 9999) {
+      tokensSaved = Math.min(9999, tokensSaved + Math.floor(Math.random() * 15 + 8));
+      tokensCount.textContent = formatTokens(tokensSaved);
+      tokensCount.classList.remove("ticking");
+      void tokensCount.offsetWidth;
+      tokensCount.classList.add("ticking");
+    }
+    tickerTimer = setTimeout(tick, 180 + Math.random() * 120);
+  };
+  tick();
+}
+
+function pauseTicker() {
+  tickerRunning = false;
+  clearTimeout(tickerTimer);
+}
+
+function resetTicker() {
+  pauseTicker();
+  tokensSaved = 0;
+  tokensCount.textContent = "0000";
+  tokensBlock.classList.remove("visible");
+}
+
+// ── Suggestion / guide flow ────────────────────────────────────────────────
+function setSuggestion(idx) {
+  if (idx === currentSuggestion) return;
+  currentSuggestion = idx;
+  suggestionTx.classList.add("changing");
+  setTimeout(() => {
+    suggestionTx.textContent = SUGGESTIONS[idx];
+    suggestionTx.classList.remove("changing");
+  }, 300);
+}
+
+function showSuggestion(idx) {
+  setSuggestion(idx);
+  suggestionEl.classList.add("visible");
+}
+
+function hideSuggestion() {
+  suggestionEl.classList.remove("visible");
+}
+
+function predictionPassesThreshold(p) {
+  return p.conf >= modelClass2Threshold;
+}
+
+function updateGuidedPrompt(p) {
+  // Don't advance the guide while the LLM is responding.
+  if (llmActive) return;
+
+  const confident = predictionPassesThreshold(p);
+  const isSilent = p.s === "silent";
+
+  if (guideStep === GUIDE_STEPS.AWAITING_COMPUTER) {
+    if (p.s === "device" && confident) {
+      guideStep = GUIDE_STEPS.COMPUTER_DONE_WAITING_FOR_SILENCE;
+      hideSuggestion();
+      return;
+    }
+    showSuggestion(0);
+    return;
+  }
+
+  if (guideStep === GUIDE_STEPS.COMPUTER_DONE_WAITING_FOR_SILENCE) {
+    if (isSilent) {
+      guideStep = GUIDE_STEPS.AWAITING_HUMAN;
+      showSuggestion(1);
+      return;
+    }
+    hideSuggestion();
+    return;
+  }
+
+  if (guideStep === GUIDE_STEPS.AWAITING_HUMAN) {
+    if (p.s === "human" && confident) {
+      guideStep = GUIDE_STEPS.HUMAN_DONE_WAITING_FOR_SILENCE;
+      hideSuggestion();
+      return;
+    }
+    showSuggestion(1);
+    return;
+  }
+
+  if (guideStep === GUIDE_STEPS.HUMAN_DONE_WAITING_FOR_SILENCE) {
+    if (isSilent) {
+      guideStep = GUIDE_STEPS.DONE;
+      showSuggestion(2);
+      return;
+    }
+    hideSuggestion();
+    return;
+  }
+
+  showSuggestion(2);
+}
+
 // ── Render: rebuild visible UI from latest signals ─────────────────────────
 function render() {
   const displayS = llmActive ? "responding" : (warmedUp ? pred.s : "silent");
@@ -82,6 +224,7 @@ function render() {
     statConv.textContent = "--";
     soundBars.classList.remove("visible");
     orbEl.classList.remove("active", "warming");
+    hideSuggestion();
     return;
   }
 
@@ -95,6 +238,7 @@ function render() {
     soundBars.classList.remove("visible");
     orbEl.classList.remove("active");
     orbEl.classList.add("warming");
+    hideSuggestion();
     return;
   }
 
@@ -108,6 +252,15 @@ function render() {
   const speaking = llmActive || (pred.s !== "silent" && pred.conf > 0.3);
   soundBars.classList.toggle("visible", speaking);
   orbEl.classList.toggle("active", speaking);
+
+  // Tokens ticker runs only when speech is human-directed (not at the device).
+  if (!llmActive && pred.s === "human" && pred.conf > 0.3) {
+    startTicker();
+  } else {
+    pauseTicker();
+  }
+
+  updateGuidedPrompt(pred);
 }
 
 // ── Threshold ──────────────────────────────────────────────────────────────
@@ -145,6 +298,9 @@ async function start() {
   pred = { s: "silent", conf: 0, faces: 0 };
   vadStr = "--";
   convStr = "--";
+  currentSuggestion = -1;
+  guideStep = GUIDE_STEPS.AWAITING_COMPUTER;
+  resetTicker();
 
   client = new AttentionClient({
     url: serverOverride,
@@ -164,13 +320,25 @@ async function start() {
 
   client.on("warmupComplete", () => {
     warmedUp = true;
+    showSuggestion(0);
+    // Disable with ?nogreet for diagnostics (e.g. when chasing feedback loops).
+    if (llm && ENABLE_GREETING) llm.greet(GREETING_INSTRUCTIONS);
     render();
   });
 
   client.on("prediction", (e) => {
     if (llmActive) return;
     const s = CLASS_TO_STATE[e.cls] ?? "silent";
-    pred = { s, conf: e.confidence ?? 0, faces: e.numFaces ?? 0 };
+    const newPred = { s, conf: e.confidence ?? 0, faces: e.numFaces ?? 0 };
+    // Hold the last non-silent snapshot while the server is mid-utterance
+    // (Listening/Sending). Otherwise the orb flickers SILENT in the gap
+    // between the user finishing their turn and speechReady arriving.
+    const inFlight = convStr === "Listening" || convStr === "Sending";
+    if (inFlight && newPred.s === "silent" && pred.s !== "silent") {
+      pred = { ...pred, faces: newPred.faces };
+    } else {
+      pred = newPred;
+    }
     render();
   });
 
@@ -222,9 +390,13 @@ async function start() {
       render();
     });
     llm.on("speakingEnd", () => {
-      llmActive = false;
-      if (client) { client.unmute(); client.markResponding(false); }
-      render();
+      // Hold mute briefly after playback so the speaker tail / room reverb
+      // doesn't get re-detected as device speech and loop us back into the LLM.
+      setTimeout(() => {
+        llmActive = false;
+        if (client) { client.unmute(); client.markResponding(false); }
+        render();
+      }, POST_PLAYBACK_MUTE_HOLD_MS);
     });
     llm.on("error", (e) => {
       toast(`LLM ${e.title || "error"}: ${e.message}`);
@@ -252,6 +424,9 @@ async function stop() {
   pred = { s: "silent", conf: 0, faces: 0 };
   vadStr = "--";
   convStr = "--";
+  currentSuggestion = -1;
+  guideStep = GUIDE_STEPS.AWAITING_COMPUTER;
+  resetTicker();
 
   videoEl.style.display = "none";
   if (camPlaceholder) camPlaceholder.style.display = "flex";
